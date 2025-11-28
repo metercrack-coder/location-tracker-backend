@@ -1,54 +1,53 @@
-// Simple Node.js backend server for location tracking
-// Install dependencies: npm install express body-parser
-
 const express = require('express');
 const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Store locations in a JSON file
-const DATA_FILE = path.join(__dirname, 'locations.json');
-
-// Initialize data file if it doesn't exist
-if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify([]));
-}
-
-// Helper function to read locations
-function readLocations() {
-    try {
-        const data = fs.readFileSync(DATA_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error('Error reading locations:', error);
-        return [];
+// CORS for all origins
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
     }
-}
+    next();
+});
 
-// Helper function to write locations
-function writeLocations(locations) {
-    try {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(locations, null, 2));
-        return true;
-    } catch (error) {
-        console.error('Error writing locations:', error);
-        return false;
-    }
-}
+// Store locations in memory (since file system may not persist on Render free tier)
+let locations = [];
 
-// API Routes
+// Root route
+app.get('/', (req, res) => {
+    res.json({ 
+        message: 'Location Tracking Server',
+        status: 'running',
+        endpoints: {
+            health: '/health',
+            locations: '/api/locations'
+        }
+    });
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'Server is running', 
+        timestamp: Date.now(),
+        totalLocations: locations.length
+    });
+});
 
 // GET all locations
 app.get('/api/locations', (req, res) => {
-    console.log('GET /api/locations - Fetching all locations');
-    const locations = readLocations();
+    console.log('GET /api/locations - Returning', locations.length, 'locations');
     res.json(locations);
 });
 
@@ -56,33 +55,32 @@ app.get('/api/locations', (req, res) => {
 app.post('/api/locations', (req, res) => {
     console.log('POST /api/locations - Received:', req.body);
     
-    const newLocations = Array.isArray(req.body) ? req.body : [req.body];
-    const locations = readLocations();
-    
-    // Add new locations
-    newLocations.forEach(loc => {
-        if (loc.latitude && loc.longitude && loc.timestamp) {
-            locations.push({
-                latitude: loc.latitude,
-                longitude: loc.longitude,
-                timestamp: loc.timestamp
-            });
-        }
-    });
-    
-    // Save to file
-    if (writeLocations(locations)) {
-        console.log(`Saved ${newLocations.length} new location(s). Total: ${locations.length}`);
+    try {
+        const newLocations = Array.isArray(req.body) ? req.body : [req.body];
+        
+        newLocations.forEach(loc => {
+            if (loc.latitude && loc.longitude && loc.timestamp) {
+                locations.push({
+                    latitude: loc.latitude,
+                    longitude: loc.longitude,
+                    timestamp: loc.timestamp
+                });
+            }
+        });
+        
+        console.log('Saved', newLocations.length, 'location(s). Total:', locations.length);
         res.status(200).json({ 
             success: true, 
             message: 'Locations saved',
             count: newLocations.length,
             total: locations.length
         });
-    } else {
+    } catch (error) {
+        console.error('Error saving locations:', error);
         res.status(500).json({ 
             success: false, 
-            message: 'Failed to save locations' 
+            message: 'Failed to save locations',
+            error: error.message
         });
     }
 });
@@ -90,16 +88,17 @@ app.post('/api/locations', (req, res) => {
 // DELETE all locations (optional - for testing)
 app.delete('/api/locations', (req, res) => {
     console.log('DELETE /api/locations - Clearing all locations');
-    if (writeLocations([])) {
-        res.json({ success: true, message: 'All locations cleared' });
-    } else {
-        res.status(500).json({ success: false, message: 'Failed to clear locations' });
-    }
+    locations = [];
+    res.json({ success: true, message: 'All locations cleared' });
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({ status: 'Server is running', timestamp: Date.now() });
+// 404 handler
+app.use((req, res) => {
+    res.status(404).json({ 
+        error: 'Not Found',
+        message: 'The requested endpoint does not exist',
+        availableEndpoints: ['/', '/health', '/api/locations']
+    });
 });
 
 // Start server
@@ -108,18 +107,12 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log('Location Tracking Server Started');
     console.log('=================================');
     console.log(`Server running on port ${PORT}`);
-    console.log(`Access from your network: http://YOUR_IP_ADDRESS:${PORT}`);
-    console.log('');
     console.log('Available endpoints:');
-    console.log('  GET    /api/locations  - Get all locations');
-    console.log('  POST   /api/locations  - Save new locations');
-    console.log('  DELETE /api/locations  - Clear all locations');
-    console.log('  GET    /health         - Health check');
-    console.log('=================================');
-    console.log('');
-    console.log('To find your IP address:');
-    console.log('  Windows: ipconfig');
-    console.log('  Mac/Linux: ifconfig or ip addr');
+    console.log('  GET    /              - Server info');
+    console.log('  GET    /health        - Health check');
+    console.log('  GET    /api/locations - Get all locations');
+    console.log('  POST   /api/locations - Save new locations');
+    console.log('  DELETE /api/locations - Clear all locations');
     console.log('=================================');
 });
 
